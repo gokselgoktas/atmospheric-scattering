@@ -1,0 +1,122 @@
+#pragma kernel GenerateSkybox
+#pragma kernel GenerateInscattering
+
+#include "AtmosphericScattering.hlsl"
+
+RWTexture3D<float4> _Skybox;
+
+RWTexture3D<float4> _Inscattering;
+RWTexture3D<float4> _Extinction;
+
+float3 _WorldSpaceCameraPos;
+
+[numthreads(8, 8, 8)]
+void GenerateSkybox(uint3 id : SV_DispatchThreadID)
+{
+    float3 dimensions = 0.;
+    _Skybox.GetDimensions(dimensions.x, dimensions.y, dimensions.z);
+
+    float3 uvw = (float3) id / (dimensions - 1.);
+
+    float height = uvw.x * uvw.x * _KarmanLine;
+    float mesosphere = _Planet.w + height;
+
+    float horizon = -sqrt(height * (2. * _Planet.w + height)) * rcp(mesosphere);
+
+    if (uvw.y > .5)
+        uvw.y = horizon + pow(2. * (uvw.y - .5), 5.) * (1. - horizon);
+    else
+        uvw.y = horizon - pow(2. * uvw.y, 5.) * (1. + horizon);
+
+    uvw.z = tan((2. * uvw.z - 1. + .26) * .75) * .722696;
+
+    Ray ray;
+    ray.origin = float3(0., height, 0.);
+    ray.direction = float3(sqrt(saturate(1. - uvw.y * uvw.y)), uvw.y, 0.);
+
+    Sphere surface;
+    surface.position = _Planet.xyz;
+    surface.radius = _Planet.w;
+
+    Sphere turbopause;
+    turbopause.position = _Planet.xyz;
+    turbopause.radius = _Planet.w + _KarmanLine;
+
+    Trace trace = TraceSphere(ray, turbopause);
+    float range = trace.slice.y;
+
+    trace = TraceSphere(ray, surface);
+
+    if (trace.slice.x > 0.)
+        range = min(range, trace.slice.x);
+
+    float3 light = -float3(sqrt(saturate(1. - uvw.z * uvw.z)), uvw.z, 0.);
+
+    Inscattering scattering = GetInscattering(ray, range, light, 64);
+
+    _Skybox[id.xyz] = float4(scattering.rayleigh, scattering.mie.x);
+}
+
+[numthreads(8, 8, 8)]
+void GenerateInscattering(uint3 id : SV_DispatchThreadID)
+{
+    float3 dimensions = 0.;
+    _Inscattering.GetDimensions(dimensions.x, dimensions.y, dimensions.z);
+
+    float2 uv = float2((float2) id.xy * rcp(dimensions.xy - 1.));
+
+    float3 bottom = lerp(_Frustum[0], _Frustum[3], uv.x);
+    float3 top = lerp(_Frustum[1], _Frustum[2], uv.x);
+
+    Ray ray;
+    ray.origin = _WorldSpaceCameraPos;
+    ray.direction = lerp(bottom, top, uv.y) - _WorldSpaceCameraPos;
+
+    float3 light = normalize(_SunlightDirection);
+
+    float range = length(ray.direction);
+    ray.direction /= range;
+
+    float3 slice = ray.direction * range / dimensions.z;
+    float delta = length(slice);
+
+    float4 atmosphereDensity = GetAtmosphereDensity(ray.origin, light);
+
+    float2 forward = 0.;
+    float2 local = 0.;
+
+    Inscattering result;
+    result.rayleigh = 0.;
+    result.mie = 0.;
+
+    Inscattering previous = GetLocalInscattering(atmosphereDensity.xy,
+        atmosphereDensity.zw, forward);
+
+    _Inscattering[id] = float4(0., 0., 0., 1.);
+    _Extinction[id] = float4(1., 1., 1., 1.);
+
+    for (id.z = 0; id.z < (uint) dimensions.z; ++id.z)
+    {
+        float3 position = ray.origin + slice * (float) id.z;
+
+        atmosphereDensity = GetAtmosphereDensity(position, light);
+
+        forward += (atmosphereDensity.xy + local) * delta * .5;
+        local = atmosphereDensity.xy;
+
+        Inscattering current = GetLocalInscattering(atmosphereDensity.xy,
+            atmosphereDensity.zw, forward);
+
+        result.rayleigh += (current.rayleigh + previous.rayleigh) * delta * .5;
+        result.mie += (current.mie + previous.mie) * delta * .5;
+
+        previous.rayleigh = current.rayleigh;
+        previous.mie = current.mie;
+
+        float3 scattering = _IncomingLightColor.rgb * (result.rayleigh *
+            _RayleighScattering + result.mie * _MieScattering);
+
+        _Inscattering[id] = float4(scattering, 1.);
+        _Extinction[id] = float4(GetExtinction(forward), 1.);
+    }
+}
