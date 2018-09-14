@@ -3,6 +3,7 @@ using System;
 using UnityEngine;
 using UnityEngine.Rendering;
 
+[ExecuteInEditMode]
 [RequireComponent(typeof (Camera))]
 public sealed class AtmosphericScattering : MonoBehaviour
 {
