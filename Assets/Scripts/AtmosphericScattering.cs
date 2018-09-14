@@ -205,6 +205,23 @@ public sealed class AtmosphericScattering : MonoBehaviour
         }
     }
 
+    private Texture2D m_Readback;
+    private Texture2D readback
+    {
+        get
+        {
+            if (m_Readback == null)
+            {
+                m_Readback = new Texture2D(128, 1, TextureFormat.RGBAHalf,
+                    false, true);
+
+                m_Readback.Apply();
+            }
+
+            return m_Readback;
+        }
+    }
+
     private ReflectionProbe m_ReflectionProbe;
     private ReflectionProbe reflectionProbe
     {
@@ -254,15 +271,8 @@ public sealed class AtmosphericScattering : MonoBehaviour
 
     public void GenerateLightLUTs()
     {
-        var temporary = new RenderTexture(128, 1, 0,
+        var temporary = RenderTexture.GetTemporary(128, 1, 0,
             RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
-
-        temporary.Create();
-
-        var readback = new Texture2D(128, 1, TextureFormat.RGBAHalf, false,
-            true);
-
-        readback.Apply();
 
         material.SetTexture("_RandomVectors", randomVectors);
 
@@ -278,8 +288,7 @@ public sealed class AtmosphericScattering : MonoBehaviour
 
         RenderTexture.active = null;
 
-        temporary.Release();
-        Destroy(readback);
+        RenderTexture.ReleaseTemporary(temporary);
     }
 
     private void GenerateSkybox()
